@@ -1,0 +1,9 @@
+[package]
+name    = "lex-jobs"
+version = "0.1.0"
+lex     = "0.9.7"
+
+# Zero external Lex dependencies — uses only stdlib
+# (std.sql, std.time, std.int, std.list, std.str).
+
+[dependencies]
