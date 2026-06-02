@@ -60,10 +60,18 @@ fn default_opts() -> JobOpts {
 # Production Postgres deployments may prefer a hand-tuned schema
 # (BIGSERIAL, partial index, TIMESTAMPTZ); see README.
 fn init_schema(db :: Db) -> [sql] Result[Unit, Str] {
-  let create_table := "CREATE TABLE IF NOT EXISTS lex_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, queue TEXT NOT NULL, handler TEXT NOT NULL, payload TEXT NOT NULL, scheduled_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3, status TEXT NOT NULL DEFAULT 'pending', last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+  let pg_ddl := "CREATE TABLE IF NOT EXISTS lex_jobs (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, queue TEXT NOT NULL, handler TEXT NOT NULL, payload TEXT NOT NULL, scheduled_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3, status TEXT NOT NULL DEFAULT 'pending', last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+  let sq_ddl := "CREATE TABLE IF NOT EXISTS lex_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, queue TEXT NOT NULL, handler TEXT NOT NULL, payload TEXT NOT NULL, scheduled_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3, status TEXT NOT NULL DEFAULT 'pending', last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
   let create_index := "CREATE INDEX IF NOT EXISTS lex_jobs_dispatch ON lex_jobs (queue, status, scheduled_at)"
-  match sql.exec(db, create_table, []) {
-    Err(e) => Err(e.message),
+  let ddl := match sql.exec(db, pg_ddl, []) {
+    Ok(_) => Ok(()),
+    Err(_) => match sql.exec(db, sq_ddl, []) {
+      Err(e) => Err(e.message),
+      Ok(_) => Ok(()),
+    },
+  }
+  match ddl {
+    Err(e) => Err(e),
     Ok(_) => match sql.exec(db, create_index, []) {
       Err(e) => Err(e.message),
       Ok(_) => Ok(()),
