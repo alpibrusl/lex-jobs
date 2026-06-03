@@ -24,11 +24,17 @@
 
 import "std.sql" as sql
 
+import "std.str" as str
+
 import "std.time" as time
 
 import "std.int" as int
 
 import "std.list" as list
+
+fn sq(s :: Str) -> Str {
+  str.replace(s, "'", "''")
+}
 
 # ---- Public types ------------------------------------------------
 # Options at enqueue time.
@@ -87,7 +93,8 @@ fn enqueue(db :: Db, queue :: Str, handler :: Str, payload :: Str) -> [sql, time
 fn enqueue_with(db :: Db, queue :: Str, handler :: Str, payload :: Str, opts :: JobOpts) -> [sql, time] Result[Int, Str] {
   let now := time.now_ms() / 1000
   let scheduled := now + opts.delay_seconds
-  let row_result :: Result[List[{ id :: Int }], SqlError] := sql.query(db, "INSERT INTO lex_jobs (queue, handler, payload, scheduled_at, max_attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id", [PStr(queue), PStr(handler), PStr(payload), PInt(scheduled), PInt(opts.max_attempts), PInt(now), PInt(now)])
+  let q := str.join(["INSERT INTO lex_jobs (queue, handler, payload, scheduled_at, max_attempts, created_at, updated_at) VALUES ('", sq(queue), "', '", sq(handler), "', '", sq(payload), "', ", int.to_str(scheduled), ", ", int.to_str(opts.max_attempts), ", ", int.to_str(now), ", ", int.to_str(now), ") RETURNING id"], "")
+  let row_result :: Result[List[{ id :: Int }], SqlError] := sql.query(db, q, [])
   match row_result {
     Err(e) => Err(e.message),
     Ok(rows) => match list.head(rows) {
@@ -141,7 +148,8 @@ fn work_forever(db :: Db, queue :: Str, sleep_ms :: Int, dispatch :: (Str, Str) 
 
 # ---- Observability -----------------------------------------------
 fn count_pending(db :: Db, queue :: Str) -> [sql] Result[Int, Str] {
-  let row_result :: Result[List[{ n :: Int }], SqlError] := sql.query(db, "SELECT COUNT(*) AS n FROM lex_jobs WHERE queue = ? AND status = 'pending'", [PStr(queue)])
+  let q := str.join(["SELECT COUNT(*) AS n FROM lex_jobs WHERE queue = '", sq(queue), "' AND status = 'pending'"], "")
+  let row_result :: Result[List[{ n :: Int }], SqlError] := sql.query(db, q, [])
   match row_result {
     Err(e) => Err(e.message),
     Ok(rows) => match list.head(rows) {
@@ -164,7 +172,8 @@ fn count_pending(db :: Db, queue :: Str) -> [sql] Result[Int, Str] {
 # single worker per queue.
 fn try_claim(db :: Db, queue :: Str) -> [sql, time] Result[Option[JobRow], Str] {
   let now := time.now_ms() / 1000
-  let row_result :: Result[List[JobRow], SqlError] := sql.query(db, "UPDATE lex_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = (SELECT id FROM lex_jobs WHERE queue = ? AND status = 'pending' AND scheduled_at <= ? ORDER BY scheduled_at, id LIMIT 1) RETURNING id, queue, handler, payload, attempts, max_attempts", [PInt(now), PStr(queue), PInt(now)])
+  let q := str.join(["UPDATE lex_jobs SET status = 'running', attempts = attempts + 1, updated_at = ", int.to_str(now), " WHERE id = (SELECT id FROM lex_jobs WHERE queue = '", sq(queue), "' AND status = 'pending' AND scheduled_at <= ", int.to_str(now), " ORDER BY scheduled_at, id LIMIT 1) RETURNING id, queue, handler, payload, attempts, max_attempts"], "")
+  let row_result :: Result[List[JobRow], SqlError] := sql.query(db, q, [])
   match row_result {
     Err(e) => Err(e.message),
     Ok(rows) => match list.head(rows) {
@@ -176,7 +185,8 @@ fn try_claim(db :: Db, queue :: Str) -> [sql, time] Result[Option[JobRow], Str] 
 
 fn ack(db :: Db, id :: Int) -> [sql, time] Result[Unit, Str] {
   let now := time.now_ms() / 1000
-  match sql.exec(db, "UPDATE lex_jobs SET status = 'done', updated_at = ? WHERE id = ?", [PInt(now), PInt(id)]) {
+  let q := str.join(["UPDATE lex_jobs SET status = 'done', updated_at = ", int.to_str(now), " WHERE id = ", int.to_str(id)], "")
+  match sql.exec(db, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
   }
@@ -194,7 +204,8 @@ fn retry_or_fail(db :: Db, job :: JobRow, why :: Str) -> [sql, time] Result[Unit
 
 fn requeue(db :: Db, id :: Int, why :: Str) -> [sql, time] Result[Unit, Str] {
   let now := time.now_ms() / 1000
-  match sql.exec(db, "UPDATE lex_jobs SET status = 'pending', last_error = ?, updated_at = ? WHERE id = ?", [PStr(why), PInt(now), PInt(id)]) {
+  let q := str.join(["UPDATE lex_jobs SET status = 'pending', last_error = '", sq(why), "', updated_at = ", int.to_str(now), " WHERE id = ", int.to_str(id)], "")
+  match sql.exec(db, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
   }
@@ -202,7 +213,8 @@ fn requeue(db :: Db, id :: Int, why :: Str) -> [sql, time] Result[Unit, Str] {
 
 fn fail(db :: Db, id :: Int, why :: Str) -> [sql, time] Result[Unit, Str] {
   let now := time.now_ms() / 1000
-  match sql.exec(db, "UPDATE lex_jobs SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?", [PStr(why), PInt(now), PInt(id)]) {
+  let q := str.join(["UPDATE lex_jobs SET status = 'failed', last_error = '", sq(why), "', updated_at = ", int.to_str(now), " WHERE id = ", int.to_str(id)], "")
+  match sql.exec(db, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
   }
