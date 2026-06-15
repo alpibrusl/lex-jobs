@@ -1,5 +1,9 @@
 # lex-jobs — durable background job queue
 
+[![CI](https://github.com/alpibrusl/lex-jobs/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lex-jobs/actions/workflows/ci.yml)
+
+**Part of the [Lex](https://lexlang.org) project** — Library · [Manifesto](https://lexlang.org/manifesto) · [All packages](https://lexlang.org)
+
 > **Status: incubator (v0.1).** Lives in `lex-lang/lex-jobs/` while
 > the API surface firms up; the plan is to extract to
 > `alpibrusl/lex-jobs` as a standalone package once the design has
