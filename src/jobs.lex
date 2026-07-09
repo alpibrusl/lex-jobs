@@ -12,6 +12,7 @@
 #   - work_one(db, queue, dispatch)            process one job (if any)
 #   - work_forever(db, queue, sleep_ms, ...)   loop forever
 #   - count_pending(db, queue)                 observability helper
+#   - reclaim_stale(db, queue, lease_seconds)  requeue jobs orphaned by a dead worker
 #
 # v1 limitations (see README "Limitations" section):
 #   - Single-worker safe; multi-worker on PostgreSQL has a small
@@ -21,6 +22,10 @@
 #   - No dead-letter queue — exhausted-retry jobs land in status='failed'.
 #   - No structured backoff — failed jobs are re-eligible immediately
 #     up to max_attempts.
+#   - No automatic reclaim loop: a crashed worker's claimed job sits at
+#     status='running' until something calls reclaim_stale for that queue —
+#     callers that need unattended crash recovery must call it periodically
+#     (e.g. from work_forever's caller, on a timer, or before each poll).
 
 import "std.sql" as sql
 
@@ -217,6 +222,64 @@ fn fail(db :: Db, id :: Int, why :: Str) -> [sql, time] Result[Unit, Str] {
   match sql.exec(db, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
+  }
+}
+
+# ---- Crash recovery: reclaiming orphaned 'running' jobs -----------
+# try_claim's UPDATE stamps updated_at at the moment a job is claimed, so a
+# job whose updated_at is older than lease_seconds while still status='running'
+# was claimed by a worker that never came back to ack/retry/fail it — almost
+# certainly because that worker process died. Without this, such a job is
+# stuck forever: try_claim only ever looks at status='pending', so a
+# 'running' row with no live owner just sits there.
+type StaleJobRow = { id :: Int, attempts :: Int, max_attempts :: Int }
+
+fn find_stale_running(db :: Db, queue :: Str, lease_seconds :: Int) -> [sql, time] Result[List[StaleJobRow], Str] {
+  let now := time.now_ms() / 1000
+  let cutoff := now - lease_seconds
+  let q := str.join(["SELECT id, attempts, max_attempts FROM lex_jobs WHERE queue = '", sq(queue), "' AND status = 'running' AND updated_at <= ", int.to_str(cutoff)], "")
+  let row_result :: Result[List[StaleJobRow], SqlError] := sql.query(db, q, [])
+  match row_result {
+    Err(e) => Err(e.message),
+    Ok(rows) => Ok(rows),
+  }
+}
+
+# Requeue (to 'pending') every 'running' job in `queue` whose lease has
+# expired, so another worker can pick it up. A job already at max_attempts
+# is marked 'failed' instead — mirroring retry_or_fail's cap — so a job
+# whose handler crashes the whole worker process every time it runs cannot
+# retry forever just because it always looks "orphaned" rather than
+# explicitly failed.
+#
+# Not automatic: callers that need unattended crash recovery must invoke
+# this periodically for each queue they run workers against (e.g. once per
+# poll, or on a timer) — see the module docstring.
+#
+# lease_seconds should exceed the slowest legitimate job's real runtime;
+# too short reclaims (and duplicates work for) a job that's simply still
+# running, too long delays recovery from an actual crash.
+fn reclaim_stale(db :: Db, queue :: Str, lease_seconds :: Int) -> [sql, time] Result[Int, Str] {
+  match find_stale_running(db, queue, lease_seconds) {
+    Err(e) => Err(e),
+    Ok(rows) => reclaim_rows(db, rows, 0),
+  }
+}
+
+fn reclaim_rows(db :: Db, rows :: List[StaleJobRow], n :: Int) -> [sql, time] Result[Int, Str] {
+  match list.head(rows) {
+    None => Ok(n),
+    Some(row) => {
+      let outcome := if row.attempts >= row.max_attempts {
+        fail(db, row.id, "reclaimed: worker lease expired at max_attempts")
+      } else {
+        requeue(db, row.id, "reclaimed: worker lease expired")
+      }
+      match outcome {
+        Err(e) => Err(e),
+        Ok(_) => reclaim_rows(db, list.tail(rows), n + 1),
+      }
+    },
   }
 }
 

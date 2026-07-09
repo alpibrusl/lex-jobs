@@ -1,6 +1,6 @@
 [package]
 name    = "lex-jobs"
-version = "0.1.0"
+version = "0.2.0"
 lex     = "0.10.0"
 
 # Zero external Lex dependencies — uses only stdlib

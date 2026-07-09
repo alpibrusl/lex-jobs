@@ -58,6 +58,32 @@ A complete runnable example lives at `examples/welcome_email.lex`.
   `max_attempts`; `Fail(reason)` → terminal failure, status moves
   to `failed`.
 
+## Crash recovery
+
+A worker that dies mid-job (process killed, machine crash) leaves
+that job at `status='running'` forever — `try_claim` only ever
+looks at `status='pending'`, so an orphaned `'running'` row is
+otherwise stuck for good. `reclaim_stale(db, queue, lease_seconds)`
+finds `'running'` jobs whose `updated_at` (stamped at claim time)
+is older than `lease_seconds` and requeues them to `'pending'` —
+or, if the job is already at `max_attempts`, marks it `'failed'`
+instead of retrying it forever.
+
+This is **not automatic**. Call it periodically for each queue you
+run workers against — before each poll, on a timer, or from a
+separate janitor process:
+
+```lex
+# once per poll, ahead of try_claim:
+let _ = jobs.reclaim_stale(db, "emails", 300)   # 5 min lease
+jobs.work_forever(db, "emails", 500, dispatch_fn)
+```
+
+Pick `lease_seconds` comfortably above your slowest legitimate
+job's real runtime — too short reclaims (and duplicates work for)
+a job that's simply still running; too long delays recovery from
+an actual crash.
+
 ## Production use — Postgres
 
 ```sh
