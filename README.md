@@ -178,3 +178,9 @@ lex-jobs = { git = "https://github.com/alpibrusl/lex-jobs" }
 
 Until then, downstream apps using lex-jobs live in the same repo
 tree as their lex-lang checkout.
+
+## License
+
+Copyright (c) 2026 lex-jobs contributors.
+
+Licensed under the [EUPL-1.2](LICENSE) — the European Union Public Licence, as used across the `lex-*` ecosystem.
